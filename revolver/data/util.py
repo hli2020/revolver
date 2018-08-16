@@ -8,18 +8,19 @@ class InputsTargetAuxCollate(object):
     """
 
     def __call__(self, batch):
-        batch = batch[0]  # assume batch size one
+        batch = batch[0]  # assume batch size one   # TODO: why bs=1
         if len(batch) >= 3 and isinstance(batch[-1], dict):
             inputs, target, aux = batch[:-2], batch[-2], batch[-1]
-            inputs = list(inputs)
-            for i, input_ in enumerate(inputs):
-                if not isinstance(input_, list):
-                    inputs[i] = default_collate(input_).unsqueeze(0)
-                else:
-                    inputs[i] = [[default_collate(in_).unsqueeze(0)
-                                  for in_ in inp] for inp in input_]
-            target = default_collate(target)
-            return (*inputs, target, aux)
+
+            inputs = default_collate([inputs])
+            # for i, input_ in enumerate(inputs):
+            #     if not isinstance(input_, list):
+            #         inputs[i] = default_collate([input_]).unsqueeze(0)   # TODO: should be a list input!
+            #     else:
+            #         inputs[i] = [[default_collate(in_).unsqueeze(0) for in_ in inp] for inp in input_]
+            target = default_collate([target])
+            return inputs, target, aux
+
         raise TypeError("Data should contain (inputs, target, aux) tuples; "
                         "found: {}".format(type(batch)))
 

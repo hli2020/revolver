@@ -9,15 +9,12 @@ import click
 import numpy as np
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torch.multiprocessing as multiprocessing
-from torch.autograd import Variable
 
 from revolver.data import datasets, datatypes, prepare_loader
 from revolver.model import models, prepare_model
 from revolver.model.loss import CrossEntropyLoss2D
-from revolver.metrics import SegScorer
 
 from evaluate import evaluate
 
@@ -36,7 +33,7 @@ def pevaluate(q):
 @click.command()
 @click.argument('experiment', type=str)
 @click.option('--model', type=click.Choice(models.keys()))
-@click.option('--dataset', type=click.Choice(datasets.keys()), default='sbdd')
+@click.option('--dataset', type=click.Choice(datasets.keys()), default='sbdd')   # sbdd
 @click.option('--datatype', type=click.Choice(datatypes.keys()), default='semantic')
 @click.option('--split', type=str, default='train')
 @click.option('--val_dataset', type=click.Choice(datasets.keys()), default='sbdd')
@@ -49,18 +46,23 @@ def pevaluate(q):
 @click.option('--seed', default=1337)
 @click.option('--gpu', default=0)
 @click.option('--do-eval/--no-eval', default=True)
-def main(experiment, model, dataset, datatype, split, val_dataset, val_split, class_group, count, shot, lr, max_iter, seed, gpu, do_eval):
+def main(experiment, model, dataset, datatype, split, val_dataset,
+         val_split, class_group, count, shot, lr, max_iter, seed, gpu, do_eval):
+
     setproctitle.setproctitle(experiment)
     version = subprocess.check_output(['git', 'describe', '--always'], universal_newlines=True).strip()
     # experiment metadata
     args = locals()
 
+    device = 'cpu' if not torch.cuda.is_available() else 'cuda'
+    # args.update({'device': device})
+
     exp_dir = './experiments/{}/'.format(experiment)
-    if os.path.isdir(exp_dir):
-        click.confirm(click.style("{} already exists. Do you want to "
-            "obliterate it and continue?".format(experiment), fg='red'),
-            abort=True)
-        shutil.rmtree(exp_dir)
+    # if os.path.isdir(exp_dir):
+    #     click.confirm(click.style("{} already exists. Do you want to "
+    #                               "obliterate it and continue?".format(experiment), fg='red'), abort=True)
+    #     shutil.rmtree(exp_dir)
+    shutil.rmtree(exp_dir)
     try:
         os.makedirs(exp_dir, exist_ok=True)
     except:
@@ -69,7 +71,7 @@ def main(experiment, model, dataset, datatype, split, val_dataset, val_split, cl
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu)
 
     logging.basicConfig(filename=exp_dir + 'log', level=logging.INFO,
-        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
+                        format='[%(asctime)s.%(msecs)03d] %(message)s', datefmt='%H:%M:%S')
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     logging.info("training %s", experiment)
     logging.info("args: %s", args)
@@ -102,13 +104,13 @@ def main(experiment, model, dataset, datatype, split, val_dataset, val_split, cl
     val_dataset_name = val_dataset or dataset_name
 
     model_name = model
-    model = prepare_model(model, dataset.num_classes).cuda()
+    model = prepare_model(model, dataset.num_classes).to(args['device'])
 
-    loss_fn = CrossEntropyLoss2D(size_average=True, ignore_index=dataset.ignore_index)
-    learned_params = filter(lambda p: p.requires_grad, model.parameters())
+    loss_fn = CrossEntropyLoss2D(ignore_index=dataset.ignore_index)
+    learned_params = filter(lambda x: x.requires_grad, model.parameters())
     opt = optim.SGD(learned_params, lr=lr, momentum=0.99, weight_decay=0.0005)
 
-    iter_order = int(np.log10(max_iter) + 1 )  # for pretty printing
+    iter_order = int(np.log10(max_iter) + 1)  # for pretty printing
 
     epoch = 0
     iteration = 0
@@ -119,47 +121,51 @@ def main(experiment, model, dataset, datatype, split, val_dataset, val_split, cl
         epoch += 1
         train_loss = 0.
         for i, data in enumerate(loader):
-            inputs, target, aux = data[:-2], data[-2], data[-1]
-            inputs = [Variable(inp).cuda() if not isinstance(inp, list) else
-                    [[Variable(i_).cuda() for i_ in in_] for in_ in inp] for inp in inputs]
-            target = Variable(target).cuda(async=True)
+            inputs, target, aux = data[0][0], data[1], data[2]
+            inputs = inputs.to(args['device'])
+            target = target.to(args['device'])
 
-            scores = model(*inputs)
+            scores = model(inputs)
             loss = loss_fn(scores, target)
             loss.backward()
 
-            train_loss += loss.data[0]
-            losses.append(loss.data[0])
+            train_loss += loss.item()
+            losses.append(loss.item())
             if iteration % 20 == 0:
-                logging.info("%s", "iter {iteration:{iter_order}d} loss {mean_loss:02.5f}".format(iteration=iteration, iter_order=iter_order, mean_loss=np.mean(losses)))
+                logging.info("%s", "iter {iteration:{iter_order}d} loss {mean_loss:02.5f}".format(
+                    iteration=iteration, iter_order=iter_order, mean_loss=np.mean(losses)))
                 losses = []
 
             if iteration % 4000 == 0:
                 # snapshot
                 logging.info("snapshotting...")
-                snapshot_path = exp_dir + 'snapshot-iter{iteration:0{iter_order}d}.pth'.format(iteration=iteration, iter_order=iter_order)
+                snapshot_path = exp_dir + 'snapshot-iter{iteration:0{iter_order}d}.pth'.format(
+                    iteration=iteration, iter_order=iter_order)
                 torch.save(model.state_dict(), snapshot_path)
                 # evaluate
                 if do_eval:
                     logging.info("evaluating...")
-                    hist_path = exp_dir + 'hist-iter{iteration:0{iter_order}d}'.format(iteration=iteration, iter_order=iter_order)
+                    hist_path = exp_dir + 'hist-iter{iteration:0{iter_order}d}'.format(
+                        iteration=iteration, iter_order=iter_order)
                     try:
                         # wait for the last evalution if it's still running
                         q.join()
                     except:
                         pass
                     # carry out evaluation in independent process for determinism and speed
-                    q.put((model_name, snapshot_path, val_dataset_name, datatype, val_split, count, shot, False, seed, gpu, hist_path))
-
+                    q.put((model_name, snapshot_path, val_dataset_name, datatype, val_split,
+                           count, shot, False, seed, gpu, hist_path, device))
             # update
             opt.step()
             opt.zero_grad()
             iteration += 1
+
         logging.info("%s", "train loss = {:02.5f}".format(train_loss / len(dataset)))
 
     # signal to evaluation process that training is done
     if do_eval:
         q.put(None)
+
 
 if __name__ == '__main__':
     main()

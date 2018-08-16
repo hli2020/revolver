@@ -22,3 +22,33 @@ scenes for semantic segmentation. Our guided segmentor is state-of-the-art in
 accuracy for the amount of annotation and time.
 
 This is a **work-in-progress**, and not yet a reference implementation of the paper, and could change at any time.
+
+
+### Below are Hongyang's notes
+- VOCSeg dataset download from VOC official website.
+- SBDD dataset download 
+[here](https://github.com/shelhamer/fcn.berkeleyvision.org/blob/master/data/pascal/README.md#pascal-voc-and-sbd).
+
+
+
+Create symlink to datasets:
+
+    ln -s /absolute/path/to/voc_seg data/voc2012
+    ln -s /absolute/path/to/sbdd data/sbdd
+    
+Install dependencies:
+    
+    conda install -c conda-forge setproctitle
+    conda install -c anaconda click scipy 
+    
+How to run:
+
+    # train
+    python train.py your_exp_name --model fcn32s
+    # test 
+    python evaluate.py your_exp_name --model fcn32s
+    
+Repo environment:
+
+- On work macbook, pycharm, OSX, `no-cuda`, compiler `Python 3.6 (revolver)`
+- On s42, remote debug, ``cuda``

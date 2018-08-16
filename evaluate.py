@@ -7,7 +7,6 @@ import click
 import numpy as np
 
 import torch
-from torch.autograd import Variable
 
 from revolver.data import datasets, datatypes, prepare_loader
 from revolver.model import models, prepare_model
@@ -15,7 +14,7 @@ from revolver.model.loss import CrossEntropyLoss2D
 from revolver.metrics import SegScorer
 
 
-def evaluate(model, weights, dataset, datatype, split, count, shot, multi, seed, gpu, output):
+def evaluate(model, weights, dataset, datatype, split, count, shot, multi, seed, gpu, output, device):
     print("evaluating {} with weights {} on {} {}-{}".format(model, weights, datatype, dataset, split))
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu)
 
@@ -27,23 +26,27 @@ def evaluate(model, weights, dataset, datatype, split, count, shot, multi, seed,
     dataset = prepare_data(dataset, split, count=count, shot=shot, multi=multi)
     loader = prepare_loader(dataset, evaluation=True)
 
-    model = prepare_model(model, dataset.num_classes).cuda()
+    model = prepare_model(model, dataset.num_classes).to(device)
     model.load_state_dict(torch.load(weights))
     model.eval()
 
-    loss_fn = CrossEntropyLoss2D(size_average=True, ignore_index=dataset.ignore_index)
+    loss_fn = CrossEntropyLoss2D(ignore_index=dataset.ignore_index)
 
     total_loss = 0.
     metrics = SegScorer(len(dataset.classes))  # n.b. this is the full no. of classes, not the no. of model outputs
     for i, data in enumerate(loader):
-        inputs, target, aux = data[:-2], data[-2], data[-1]
-        inputs = [Variable(inp, volatile=True).cuda() if not isinstance(inp, list) else
-                [[Variable(i_, volatile=True).cuda() for i_ in in_] for in_ in inp] for inp in inputs]
-        target = Variable(target, volatile=True).cuda(async=True)
 
-        scores = model(*inputs)
+        inputs, target, aux = data[0][0], data[1], data[2]
+        inputs = inputs.to(device)
+        target = target.to(device)
+        # inputs, target, aux = data[:-2], data[-2], data[-1]
+        # inputs = [Variable(inp, volatile=True).cuda() if not isinstance(inp, list) else
+        #           [[Variable(i_, volatile=True).cuda() for i_ in in_] for in_ in inp] for inp in inputs]
+        # target = Variable(target, volatile=True).cuda(async=True)
+
+        scores = model(inputs)
         loss = loss_fn(scores, target)
-        total_loss += loss.data[0]
+        total_loss += loss.item()
 
         # segmentation evaluation
         _, seg = scores.data[0].max(0)
@@ -64,7 +67,7 @@ def evaluate(model, weights, dataset, datatype, split, count, shot, multi, seed,
 @click.option('--weights', type=click.Path())
 @click.option('--dataset', type=click.Choice(datasets.keys()), default='voc')
 @click.option('--datatype', type=click.Choice(datatypes.keys()), default='semantic')
-@click.option('--split', type=str, default='valid')
+@click.option('--split', type=str, default='val')
 @click.option('--count', type=int, default=None)
 @click.option('--shot', type=int, default=1)
 @click.option('--multi', is_flag=True, default=False)
@@ -75,6 +78,7 @@ def main(experiment, model, weights, dataset, datatype, split, count, shot, mult
     args = locals()
     print("args: {}".format(args))
 
+    device = 'cpu' if not torch.cuda.is_available() else 'cuda'
     exp_dir = './experiments/{}/'.format(experiment)
     if not os.path.isdir(exp_dir):
         raise Exception("Experiment {} does not exist.".format(experiment))
@@ -101,7 +105,8 @@ def main(experiment, model, weights, dataset, datatype, split, count, shot, mult
         if os.path.isfile(output + '.npz'):
             print("skipping existing {}".format(output))
             continue
-        evaluate(model, weights, dataset, datatype, split, count, shot, multi, seed, gpu, output)
+        evaluate(model, weights, dataset, datatype, split, count, shot, multi, seed, gpu, output, device)
+
 
 if __name__ == '__main__':
     main()
